@@ -1,0 +1,183 @@
+name: Sync Config Files from ConfigCommon
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      sync_gitignore:
+        description: '同步 .gitignore'
+        required: false
+        default: true
+        type: boolean
+      gitignore_source:
+        description: '.gitignore 來源檔案名稱'
+        required: false
+        default: 'unreal-engine.gitignore'
+        type: string
+      
+      sync_gitattributes:
+        description: '同步 .gitattributes'
+        required: false
+        default: true
+        type: boolean
+      gitattributes_source:
+        description: '.gitattributes 來源檔案名稱'
+        required: false
+        default: 'unreal-engine.gitattributes'
+        type: string
+      
+      sync_editorconfig:
+        description: '同步 .editorconfig'
+        required: false
+        default: true
+        type: boolean
+      editorconfig_source:
+        description: '.editorconfig 來源檔案名稱'
+        required: false
+        default: '.editorconfig'
+        type: string
+      
+      sync_clangformat:
+        description: '同步 .clang-format'
+        required: false
+        default: false
+        type: boolean
+      clangformat_source:
+        description: '.clang-format 來源檔案名稱'
+        required: false
+        default: '.clang-format'
+        type: string
+      
+      additional_files:
+        description: '額外檔案 (格式: 本地檔案:遠端檔案，用逗號分隔)'
+        required: false
+        default: ''
+        type: string
+  
+  schedule:
+    # 每週一凌晨 2 點執行
+    - cron: '0 2 * * 1'
+
+jobs:
+  sync-config-files:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download and sync config files
+        id: sync_files
+        run: |
+          # 建立檔案清單
+          FILES=()
+          
+          # 根據輸入參數加入檔案
+          if [ "${{ github.event.inputs.sync_gitignore || 'true' }}" = "true" ]; then
+            FILES+=(".gitignore:${{ github.event.inputs.gitignore_source || 'unreal-engine.gitignore' }}")
+          fi
+          
+          if [ "${{ github.event.inputs.sync_gitattributes || 'true' }}" = "true" ]; then
+            FILES+=(".gitattributes:${{ github.event.inputs.gitattributes_source || 'unreal-engine.gitattributes' }}")
+          fi
+          
+          if [ "${{ github.event.inputs.sync_editorconfig || 'true' }}" = "true" ]; then
+            FILES+=(".editorconfig:${{ github.event.inputs.editorconfig_source || '.editorconfig' }}")
+          fi
+          
+          if [ "${{ github.event.inputs.sync_clangformat || 'false' }}" = "true" ]; then
+            FILES+=(".clang-format:${{ github.event.inputs.clangformat_source || '.clang-format' }}")
+          fi
+          
+          # 處理額外檔案
+          if [ -n "${{ github.event.inputs.additional_files }}" ]; then
+            IFS=',' read -ra EXTRA_FILES <<< "${{ github.event.inputs.additional_files }}"
+            for file in "${EXTRA_FILES[@]}"; do
+              FILES+=("$file")
+            done
+          fi
+          
+          BASE_URL="https://raw.githubusercontent.com/dadavidtseng/ConfigCommon/main"
+          CHANGED_FILES=""
+          ANY_CHANGED=false
+          
+          # 處理每個檔案
+          for FILE_PAIR in "${FILES[@]}"; do
+            # 分割本地和遠端檔案名
+            IFS=':' read -r LOCAL_FILE REMOTE_FILE <<< "$FILE_PAIR"
+            
+            # 移除前後空格
+            LOCAL_FILE=$(echo "$LOCAL_FILE" | xargs)
+            REMOTE_FILE=$(echo "$REMOTE_FILE" | xargs)
+            
+            echo "Processing $LOCAL_FILE (from $REMOTE_FILE)"
+            
+            # 下載檔案
+            SUCCESS=false
+            if curl -fsSL "$BASE_URL/$REMOTE_FILE" -o "${LOCAL_FILE}.temp"; then
+              if [ -s "${LOCAL_FILE}.temp" ]; then
+                echo "Successfully downloaded $REMOTE_FILE"
+                SUCCESS=true
+              fi
+            fi
+            
+            if [ "$SUCCESS" = false ]; then
+              echo "Failed to download $REMOTE_FILE, skipping..."
+              rm -f "${LOCAL_FILE}.temp"
+              continue
+            fi
+            
+            # 檢查變更
+            if [ -f "$LOCAL_FILE" ]; then
+              if ! cmp -s "$LOCAL_FILE" "${LOCAL_FILE}.temp"; then
+                echo "Changes detected in $LOCAL_FILE"
+                mv "${LOCAL_FILE}.temp" "$LOCAL_FILE"
+                CHANGED_FILES="$CHANGED_FILES $LOCAL_FILE"
+                ANY_CHANGED=true
+              else
+                echo "No changes in $LOCAL_FILE"
+                rm -f "${LOCAL_FILE}.temp"
+              fi
+            else
+              echo "Creating new $LOCAL_FILE"
+              mv "${LOCAL_FILE}.temp" "$LOCAL_FILE"
+              CHANGED_FILES="$CHANGED_FILES $LOCAL_FILE"
+              ANY_CHANGED=true
+            fi
+          done
+          
+          # 清理所有暫存檔案
+          rm -f *.temp
+          
+          # 設定輸出
+          if [ "$ANY_CHANGED" = true ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "changed_files=$CHANGED_FILES" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push
+        if: steps.sync_files.outputs.changed == 'true'
+        run: |
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add .
+          git commit -m "chore: update config files from ConfigCommon
+          
+          Updated files:${{ steps.sync_files.outputs.changed_files }}"
+          git push
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.sync_files.outputs.changed }}" = "true" ]; then
+            echo "Config files have been updated and committed"
+            echo "Updated files:${{ steps.sync_files.outputs.changed_files }}"
+          else
+            echo "All config files are already up to date"
+          fi
