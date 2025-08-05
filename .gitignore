@@ -1,5 +1,9 @@
 # Visual Studio 2015 user specific files
 .vs/
+.idea/
+.qudo/
+.vsconfig
+*.sln.DotSettings.user
 
 # Compiled Object files
 *.slo
@@ -71,5 +75,4 @@ Intermediate/*
 Plugins/**/Intermediate/*
 
 # Cache files for the editor to use
-DerivedDataCache/
-DerivedDataCache/*.qodo
+DerivedDataCache/*
