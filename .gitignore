@@ -3,9 +3,6 @@
 .idea/
 .qudo/
 .vsconfig
-
-# Claude AI context files
-.claude/
 *.sln.DotSettings.user
 *.user
 
